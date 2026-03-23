@@ -3,8 +3,12 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/xml"
 	"fmt"
+	"html"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -108,6 +112,19 @@ func handlerGetUsers(s *state, cmd command) error {
 	return nil
 }
 
+func handlerAgg(s *state, cmd command) error {
+	if len(cmd.args) != 0 {
+		return fmt.Errorf("Expected no arguments after 'agg' command")
+	}
+	feedURL := "https://www.wagslane.dev/index.xml"
+	rssFeed, err := fetchFeed(context.Background(), feedURL)
+	if err != nil {
+		return fmt.Errorf("Error fetching feed: %v", err)
+	}
+	fmt.Println(rssFeed)
+	return nil
+}
+
 // runs a given command with the provided state if it exists.
 func (c *CLIcommands) run(s *state, cmd command) error {
 	if handler, exists := c.cmd[cmd.name]; exists {
@@ -120,6 +137,47 @@ func (c *CLIcommands) run(s *state, cmd command) error {
 // registers a new handler function for a command name
 func (c *CLIcommands) register(name string, f func(*state, command) error) {
 	c.cmd[name] = f
+}
+
+func fetchFeed(ctx context.Context, feedURL string) (*config.RSSFeed, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("Error creating request: %v", err)
+	}
+	req.Header.Set("User-Agent", "gator")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Error performing request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Error reading response body: %v", err)
+	}
+
+	var rssFeed config.RSSFeed
+	if err := xml.Unmarshal(body, &rssFeed); err != nil {
+		return nil, fmt.Errorf("Error unmarshalling RSS feed: %v", err)
+	}
+
+	unescapedTitle := html.UnescapeString(rssFeed.Channel.Title)
+	rssFeed.Channel.Title = unescapedTitle
+	unescapedDescription := html.UnescapeString(rssFeed.Channel.Description)
+	rssFeed.Channel.Description = unescapedDescription
+	for _, item := range rssFeed.Channel.Item {
+		unescapedItemTitle := html.UnescapeString(item.Title)
+		item.Title = unescapedItemTitle
+		unescapedItemDescription := html.UnescapeString(item.Description)
+		item.Description = unescapedItemDescription
+	}
+
+	return &rssFeed, nil
 }
 
 func main() {
@@ -143,6 +201,7 @@ func main() {
 	cliCommands.register("register", handlerRegister)
 	cliCommands.register("reset", handlerReset)
 	cliCommands.register("users", handlerGetUsers)
+	cliCommands.register("agg", handlerAgg)
 
 	cliArgs := os.Args[1:]
 	/*if len(cliArgs) < 2 {

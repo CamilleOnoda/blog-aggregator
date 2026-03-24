@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/CamilleOnoda/blog-aggregator/internal/config"
@@ -125,30 +126,67 @@ func handlerAgg(s *state, cmd command) error {
 	return nil
 }
 
-func handlerAddFeed(s *state, cmd command) error {
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.args) != 2 {
-		return fmt.Errorf("Expected exactly 2 arguments after 'addfeed' command")
+		return fmt.Errorf("Usage: addfeed <feed name> <feed url>")
+	}
+	feedName := cmd.args[0]
+	feedURL := cmd.args[1]
+
+	feed, err := s.db.GetFeedByURL(context.Background(), feedURL)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("Error checking existing feed: %v", err)
 	}
 
-	currentUser, err := s.db.GetUser(context.Background(), s.cfg.Current_user_name)
-	if err != nil {
-		return fmt.Errorf("Error getting user: %v", err)
+	if err == nil {
+		_, followErr := s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+			ID:        uuid.New(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			UserID:    user.ID,
+			FeedID:    feed.ID,
+		})
+		if followErr == nil {
+			fmt.Printf("Feed '%s' already exists; now followed by user '%s'\n", feed.Name, user.Name)
+			return nil
+		}
+
+		if strings.Contains(strings.ToLower(followErr.Error()), "unique") {
+			fmt.Printf("User '%s' already follows feed '%s'\n", user.Name, feed.Name)
+			return nil
+		}
+
+		return fmt.Errorf("Error following existing feed: %v", followErr)
 	}
 
-	feed, er := s.db.CreateFeed(context.Background(), database.CreateFeedParams{
+	feed, err = s.db.CreateFeed(context.Background(), database.CreateFeedParams{
 		ID:        uuid.New(),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-		Name:      cmd.args[0],
-		Url:       cmd.args[1],
-		UserID:    currentUser.ID,
+		Name:      feedName,
+		Url:       feedURL,
+		UserID:    user.ID,
 	})
-	if er != nil {
-		return fmt.Errorf("Error creating feed: %v", er)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return fmt.Errorf("Feed name or URL already exists. Try follow or choose a different name/url")
+		}
+		return fmt.Errorf("Error creating feed: %v", err)
 	}
 
-	fmt.Printf("Feed '%s' added successfully for user '%s'\n", feed.Name, currentUser.Name)
-	fmt.Printf("Feed url: %s\nCreated at: %s\nUpdated at: %s", feed.Url, feed.CreatedAt, feed.UpdatedAt)
+	_, err = s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		UserID:    user.ID,
+		FeedID:    feed.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("Error following feed: %v", err)
+	}
+
+	fmt.Printf("Feed '%s' added successfully for user '%s'\n", feed.Name, user.Name)
+	fmt.Printf("Feed url: %s\nCreated at: %s", feed.Url, feed.CreatedAt)
 	return nil
 }
 
@@ -170,14 +208,9 @@ func handlerGetFeeds(s *state, cmd command) error {
 	return nil
 }
 
-func handlerFeedFollow(s *state, cmd command) error {
+func handlerFeedFollow(s *state, cmd command, user database.User) error {
 	if len(cmd.args) != 1 {
-		return fmt.Errorf("Expected a URL after 'follow' command")
-	}
-
-	currentUser, err := s.db.GetUser(context.Background(), s.cfg.Current_user_name)
-	if err != nil {
-		return fmt.Errorf("Error getting user: %v", err)
+		return fmt.Errorf("Usage: follow <feed url>")
 	}
 
 	feedData, err := s.db.GetFeedByURL(context.Background(), cmd.args[0])
@@ -189,14 +222,31 @@ func handlerFeedFollow(s *state, cmd command) error {
 		ID:        uuid.New(),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-		UserID:    currentUser.ID,
+		UserID:    user.ID,
 		FeedID:    feedData.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("Error following feed: %v", err)
 	}
 
-	fmt.Printf("Successfully followed feed: %s\nUser: %s\n", feedData.Name, currentUser.Name)
+	fmt.Printf("Successfully followed feed: %s\nUser: %s\n", feedData.Name, user.Name)
+	return nil
+}
+
+func handlerFollowingFeeds(s *state, cmd command, user database.User) error {
+	if len(cmd.args) != 0 {
+		return fmt.Errorf("Usage: following")
+	}
+
+	feeds, err := s.db.GetFeedFollowsForUser(context.Background(), user.ID)
+	if err != nil {
+		return fmt.Errorf("Error getting followed feeds: %v", err)
+	}
+
+	fmt.Printf("Feeds followed by: %s\n", user.Name)
+	for _, feed := range feeds {
+		fmt.Printf("- %s\n", feed.FeedName)
+	}
 	return nil
 }
 
@@ -253,6 +303,16 @@ func fetchFeed(ctx context.Context, feedURL string) (*config.RSSFeed, error) {
 	return &rssFeed, nil
 }
 
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		currentUser, err := s.db.GetUser(context.Background(), s.cfg.Current_user_name)
+		if err != nil {
+			return fmt.Errorf("Error getting user: %v", err)
+		}
+		return handler(s, cmd, currentUser)
+	}
+}
+
 func main() {
 	cfg, err := config.Read()
 	if err != nil {
@@ -275,9 +335,10 @@ func main() {
 	cliCommands.register("reset", handlerReset)
 	cliCommands.register("users", handlerGetUsers)
 	cliCommands.register("agg", handlerAgg)
-	cliCommands.register("addfeed", handlerAddFeed)
+	cliCommands.register("addfeed", middlewareLoggedIn(handlerAddFeed))
 	cliCommands.register("feeds", handlerGetFeeds)
-	cliCommands.register("follow", handlerFeedFollow)
+	cliCommands.register("follow", middlewareLoggedIn(handlerFeedFollow))
+	cliCommands.register("following", middlewareLoggedIn(handlerFollowingFeeds))
 
 	cliArgs := os.Args[1:]
 	cmd := command{

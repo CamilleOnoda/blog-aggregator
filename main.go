@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CamilleOnoda/blog-aggregator/internal/config"
-	"github.com/CamilleOnoda/blog-aggregator/internal/database"
+	"github.com/CamilleOnoda/gator/internal/config"
+	"github.com/CamilleOnoda/gator/internal/database"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 )

@@ -1,4 +1,4 @@
-module github.com/CamilleOnoda/blog-aggregator
+module github.com/CamilleOnoda/gator
 
 go 1.25.5
 

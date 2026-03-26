@@ -42,7 +42,7 @@ Windows: use the [official installer](https://www.postgresql.org/download/window
 **1. Install the `gator` CLI**
 
 ```bash
-go install github.com/CamilleOnoda/blog-aggregator@latest
+go install github.com/CamilleOnoda/gator@latest
 ```
 
 This compiles the program and places the `gator` binary in `$GOPATH/bin`. Make sure that directory is on your `$PATH` — if `gator` isn't found after installing, add this to your shell config (`~/.bashrc`, `~/.zshrc`, etc.):
@@ -56,7 +56,7 @@ Once installed, you run the program as `gator` — no Go toolchain needed.
 **2. Set up the database**
 
 ```bash
-createdb blog_aggregator
+createdb gator
 ```
 
 **3. Create a config file**
@@ -65,7 +65,7 @@ The app looks for a config file at `~/.gatorconfig.json`. Create it with your da
 
 ```json
 {
-  "db_url": "postgres://localhost/blog_aggregator?sslmode=disable",
+  "db_url": "postgres://username:password@localhost:5432/gator?sslmode=disable",
   "current_user_name": ""
 }
 ```
